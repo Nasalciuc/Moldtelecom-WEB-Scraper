@@ -40,6 +40,51 @@ python src/agent.py
 
 ---
 
+## 🐳 Docker (рекомендуется для команды)
+
+Не нужно устанавливать Python, Chrome, Node.js — всё внутри контейнера.
+
+### Первый запуск
+
+```bash
+# Собрать контейнер (один раз)
+make build
+
+# Авторизовать Claude CLI (один раз)
+make login
+# → откроется ссылка, скопируй Authentication Code, вставь в терминал
+
+# Запустить полный pipeline
+make run
+```
+
+### Команды
+
+```bash
+make run        # Полный pipeline (5 фаз)
+make recon      # Только разведка + network interception
+make extract    # Только extraction (нужны данные от recon)
+make report     # Только генерация отчёта
+make shell      # Открыть bash внутри контейнера для дебага
+make clean      # Очистить output/
+```
+
+### Результаты
+
+После `make run` все файлы появляются в `output/` на хосте:
+- `anti_scraping_report.md` — отчёт
+- `subscriptions_validated.json` — данные
+- `recon_report.json` — найденные API
+- `recon_*.html` — сохранённый HTML
+
+### Заметки для команды
+
+- Claude CLI авторизация хранится в Docker volume `moldtelecom-claude-auth` — переживает пересборку контейнера
+- Output монтируется напрямую — файлы видны сразу на хосте
+- Для работы вдвоём: один собирает `make build`, второй делает `git pull && make build` и всё работает
+
+---
+
 ## 🏗️ Arhitectura / Архитектура
 
 Pipline-ul are **5 faze** / Пайплайн состоит из **5 фаз**:

@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Detect if running inside Docker
+IN_DOCKER = os.path.exists("/.dockerenv")
+
 # Claude Code CLI (no API key — uses OAuth from Pro/Max plan)
 CLAUDE_CLI = shutil.which("claude") or "claude"
 CLAUDE_MODEL = "sonnet"

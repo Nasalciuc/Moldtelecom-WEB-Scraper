@@ -119,6 +119,10 @@ async def run_recon(target_name: str, target_url: str) -> ReconResult:
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
 
+    from config import IN_DOCKER
+    if IN_DOCKER:
+        options.add_argument("--disable-gpu")
+
     log.info(f"🌐 RECON: {target_name} → {target_url}")
 
     try:

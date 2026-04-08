@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  agent:
+    build: .
+    container_name: moldtelecom-agent
+    volumes:
+      # Persist Claude CLI auth между запусками
+      - claude-auth:/root/.claude
+      # Output доступен на хосте
+      - ./output:/app/output
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Chrome в headless нужен --no-sandbox внутри Docker
+    security_opt:
+      - seccomp:unconfined
+    shm_size: "2gb"  # Chrome нужна shared memory
+
+volumes:
+  claude-auth:
+    name: moldtelecom-claude-auth
