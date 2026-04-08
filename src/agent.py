@@ -26,6 +26,14 @@ async def run_full_pipeline():
     log.info("🚀 Moldtelecom AI Scraping Agent — START")
     log.info("=" * 60)
 
+    from config import check_claude_cli
+    if check_claude_cli():
+        log.info("✅ Claude Code CLI ready")
+    else:
+        log.warning("⚠️  Claude CLI not found — AI extraction will use regex fallback")
+        log.warning("   Install: npm install -g @anthropic-ai/claude-code")
+        log.warning("   Login:   claude login")
+
     # Phase 1: Sitemap Analysis
     log.info("\n📡 PHASE 1: Sitemap Analysis")
     log.info("-" * 40)

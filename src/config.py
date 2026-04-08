@@ -1,12 +1,28 @@
 """Configuration and constants."""
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# API Keys
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Claude Code CLI (no API key — uses OAuth from Pro/Max plan)
+CLAUDE_CLI = shutil.which("claude") or "claude"
+CLAUDE_MODEL = "sonnet"
+CLAUDE_TIMEOUT = 120  # seconds
+
+
+def check_claude_cli() -> bool:
+    """Verify Claude Code CLI is installed."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            [CLAUDE_CLI, "--version"],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 # Target URLs
 TARGETS = {

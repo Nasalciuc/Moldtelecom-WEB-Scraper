@@ -27,13 +27,16 @@ cd moldtelecom-agent
 # 2. Установить зависимости / instalați dependințele
 pip install -r requirements.txt
 
-# 3. Настроить API ключ / configurați cheia API
-cp .env.example .env
-# Editați .env și adăugați ANTHROPIC_API_KEY
+# 3. Установить Claude Code CLI (один раз)
+npm install -g @anthropic-ai/claude-code
+claude login   # откроется браузер → скопируйте Authentication Code → вставьте в терминал
 
 # 4. Запустить / rulați
 python src/agent.py
 ```
+
+> **Note:** Claude CLI uses your Pro/Max plan — no API key needed, $0 extra cost.  
+> Without Claude CLI the project still runs, but AI extraction degrades to regex fallback.
 
 ---
 
@@ -106,7 +109,7 @@ bash run.sh --recon
 | Componentă | Tehnologie |
 |------------|-----------|
 | Stealth browser | [Pydoll](https://github.com/thalissonvs/pydoll) (CDP, fără webdriver flag) |
-| AI extraction | [Anthropic Claude](https://www.anthropic.com/) (claude-sonnet-4) |
+| AI extraction | [Claude Code CLI](https://github.com/anthropics/claude-code) (Pro/Max plan, no API key) |
 | HTTP requests | [aiohttp](https://docs.aiohttp.org/) |
 | Async runtime | Python `asyncio` |
 | Data models | Python `dataclasses` |
