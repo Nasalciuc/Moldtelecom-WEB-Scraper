@@ -26,6 +26,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Setup Scrapling stealth browsers
+RUN python -c "import scrapling; scrapling.setup()" 2>/dev/null || echo "Scrapling setup skipped"
+
 # Код проекта
 COPY . .
 

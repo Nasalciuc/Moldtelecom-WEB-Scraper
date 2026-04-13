@@ -1,151 +1,194 @@
 """
-Moldtelecom AI Scraping Agent — Main Orchestrator
+Moldtelecom AI Scraping Agent — 4-Level Cascade Orchestrator
+
+Levels:
+  1. HTTP Probe — baseline, shows SPA protection
+  2. Scrapling StealthyFetcher — PRIMARY, anti-bot bypass
+  3. Pydoll CDP — OPTIONAL, network interception & API discovery
+  4. Claude CLI AI — extraction from best available HTML
+
+Each level adds data. Tools are optional — cascade degrades gracefully.
 
 Usage:
-    python src/agent.py                 # Full pipeline
-    python src/agent.py --recon         # Only recon phase
-    python src/agent.py --extract       # Only extraction (needs recon data)
-    python src/agent.py --report        # Only report (needs extraction data)
+    python src/agent.py                # Full cascade
+    python src/agent.py --level 2      # Run specific level only
+    python src/agent.py --report       # Only regenerate report
+    python src/agent.py --validate     # Only merge and validate
 """
 import asyncio
-import json
 import sys
 import time
 import logging
+import random
 from datetime import datetime
-from pathlib import Path
-
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, DELAY_BETWEEN_LEVELS, check_claude_cli
 
 log = logging.getLogger(__name__)
 
 
-async def run_full_pipeline():
-    """Execute all phases sequentially."""
+async def run_cascade():
     start = time.time()
-    log.info("🚀 Moldtelecom AI Scraping Agent — START")
+    log.info("Moldtelecom AI Scraping Agent — 4-Level Cascade")
     log.info("=" * 60)
 
-    from config import check_claude_cli
-    if check_claude_cli():
-        log.info("✅ Claude Code CLI ready")
+    # Pre-flight tool checks
+    scrapling_ok, pydoll_ok, claude_ok = _check_tools()
+
+    if not scrapling_ok and not pydoll_ok:
+        log.error("Need at least Scrapling OR Pydoll installed!")
+        log.error("   pip install scrapling       (recommended)")
+        log.error("   pip install pydoll-python    (alternative)")
+        return
+
+    # ═══ LEVEL 1: HTTP Probe (always runs) ═══
+    log.info(f"\n{'='*60}")
+    log.info("LEVEL 1: Direct HTTP Probe")
+    log.info("-" * 40)
+    from level1_http import run_level1
+    try:
+        l1 = await run_level1()
+    except Exception as e:
+        log.error(f"Level 1 failed: {e}")
+        l1 = {}
+    await _level_pause()
+
+    # ═══ LEVEL 2: Scrapling (PRIMARY) ═══
+    log.info(f"\n{'='*60}")
+    log.info("LEVEL 2: Scrapling Stealth Fetch")
+    log.info("-" * 40)
+    if scrapling_ok:
+        from level2_scrapling import run_level2
+        try:
+            l2 = await run_level2()
+        except Exception as e:
+            log.error(f"Level 2 failed: {e}")
+            l2 = {"available": False, "error": str(e)}
     else:
-        log.warning("⚠️  Claude CLI not found — AI extraction will use regex fallback")
-        log.warning("   Install: npm install -g @anthropic-ai/claude-code")
-        log.warning("   Login:   claude login")
+        log.info("  Scrapling not installed — skipping")
+        l2 = {"available": False}
+    await _level_pause()
 
-    # Phase 1: Sitemap Analysis
-    log.info("\n📡 PHASE 1: Sitemap Analysis")
+    # ═══ LEVEL 3: Pydoll CDP (OPTIONAL) ═══
+    log.info(f"\n{'='*60}")
+    log.info("LEVEL 3: Pydoll Network Interception")
     log.info("-" * 40)
-    from sitemap_analyzer import analyze_sitemap
+    if pydoll_ok:
+        from level3_pydoll import run_level3
+        try:
+            l3 = await run_level3()
+        except Exception as e:
+            log.error(f"Level 3 failed: {e}")
+            l3 = {"available": False, "error": str(e)}
+
+        # API replay if endpoints were discovered
+        try:
+            from api_replay import run_api_replay
+            await run_api_replay()
+        except Exception as e:
+            log.error(f"API replay failed: {e}")
+    else:
+        log.info("  Pydoll not installed — skipping (optional)")
+        l3 = {"available": False}
+    await _level_pause()
+
+    # ═══ LEVEL 4: Claude CLI AI Extraction ═══
+    log.info(f"\n{'='*60}")
+    log.info("LEVEL 4: AI Extraction (Claude CLI)")
+    log.info("-" * 40)
+    from level4_ai import run_level4
     try:
-        sitemap_data = await analyze_sitemap()
-        log.info(
-            f"   ✅ {sitemap_data.get('total_urls_discovered', 0)} URLs discovered"
-        )
+        l4 = await run_level4()
     except Exception as e:
-        log.error(f"Sitemap failed: {e}")
-        sitemap_data = {}
+        log.error(f"Level 4 failed: {e}")
+        l4 = {"subscriptions": []}
 
-    # Phase 2: Stealth Recon + Network Interception
-    log.info("\n🌐 PHASE 2: Stealth Recon + Network Interception")
+    # ═══ FINAL: Validate + Report ═══
+    log.info(f"\n{'='*60}")
+    log.info("FINAL: Validation + Report")
     log.info("-" * 40)
-    from recon import run_full_recon
-    try:
-        recon_results = await run_full_recon()
-        total_endpoints = sum(
-            len(r.discovered_endpoints) for r in recon_results.values()
-        )
-        log.info(f"   ✅ {len(recon_results)} pages scanned, {total_endpoints} endpoints found")
-    except Exception as e:
-        log.error(f"Recon failed: {e}")
-        recon_results = {}
 
-    # Phase 3a: Direct API Extraction
-    log.info("\n⚡ PHASE 3a: Direct API Extraction")
-    log.info("-" * 40)
-    from api_extractor import extract_from_apis
-    try:
-        api_data = await extract_from_apis()
-        log.info(f"   ✅ {len(api_data.get('subscriptions', []))} subscriptions via API")
-    except Exception as e:
-        log.error(f"API extraction failed: {e}")
-        api_data = {"subscriptions": []}
-
-    # Phase 3b: AI Extraction (fallback/complement)
-    log.info("\n🤖 PHASE 3b: AI Extraction (Claude)")
-    log.info("-" * 40)
-    from ai_extractor import extract_all_pages
-    try:
-        ai_data = await extract_all_pages()
-        log.info(f"   ✅ {len(ai_data.get('subscriptions', []))} subscriptions via AI")
-    except Exception as e:
-        log.error(f"AI extraction failed: {e}")
-        ai_data = {"subscriptions": []}
-
-    # Phase 4: Cross-Validation
-    log.info("\n✅ PHASE 4: Cross-Validation")
-    log.info("-" * 40)
     from validator import validate
     try:
-        validated = await validate(api_data, ai_data)
-        log.info(f"   ✅ {validated.get('validated_count', 0)} records validated")
+        final = await validate()
     except Exception as e:
         log.error(f"Validation failed: {e}")
-        # Fall back to whichever source has data
-        validated = api_data if api_data.get("subscriptions") else ai_data
+        final = {}
 
-    # Phase 5: Report Generation
-    log.info("\n📊 PHASE 5: Report Generation")
-    log.info("-" * 40)
     from report_generator import generate_report
     try:
         report_path = generate_report()
-        log.info(f"   📄 Report: {report_path}")
+        log.info(f"Report: {report_path}")
     except Exception as e:
         log.error(f"Report generation failed: {e}")
 
     duration = time.time() - start
-    log.info(f"\n{'=' * 60}")
-    log.info(f"✅ PIPELINE COMPLETE in {duration:.1f}s")
-    log.info(f"📂 All output in: {OUTPUT_DIR}/")
-    log.info(f"{'=' * 60}")
+    subs = final.get("total_validated", 0)
+    gate = "PASSED" if final.get("quality_gate_passed") else "FAILED"
+    log.info(f"\n{'='*60}")
+    log.info(f"CASCADE COMPLETE in {duration:.1f}s")
+    log.info(f"Subscriptions: {subs} | Quality gate: {gate}")
+    log.info(f"Output: {OUTPUT_DIR}/")
+    log.info(f"{'='*60}")
 
-    _print_summary()
+
+def _check_tools() -> tuple[bool, bool, bool]:
+    """Check which tools are available."""
+    scrapling_ok = False
+    try:
+        from scrapling.fetchers import StealthyFetcher
+        scrapling_ok = True
+    except ImportError:
+        pass
+
+    pydoll_ok = False
+    try:
+        from pydoll.browser.chromium import Chrome
+        pydoll_ok = True
+    except ImportError:
+        pass
+
+    claude_ok = check_claude_cli()
+
+    log.info("Tool check:")
+    log.info(f"   Scrapling (Level 2):  {'ready' if scrapling_ok else 'not installed'}")
+    log.info(f"   Pydoll (Level 3):     {'ready' if pydoll_ok else 'not installed (optional)'}")
+    log.info(f"   Claude CLI (Level 4): {'ready' if claude_ok else 'not found (regex fallback)'}")
+
+    return scrapling_ok, pydoll_ok, claude_ok
 
 
-def _print_summary():
-    """Print a brief summary of output files."""
-    output_files = sorted(OUTPUT_DIR.glob("*"))
-    if not output_files:
-        return
-    log.info("\n📁 Output files:")
-    for f in output_files:
-        if f.name.startswith("."):
-            continue
-        size_kb = f.stat().st_size / 1024
-        log.info(f"   {f.name:<45} {size_kb:>8.1f} KB")
+async def _level_pause():
+    """Stealth pause between cascade levels."""
+    delay = DELAY_BETWEEN_LEVELS + random.uniform(0, 5)
+    log.info(f"\n  Pausing {delay:.0f}s between levels (stealth)...")
+    await asyncio.sleep(delay)
 
 
 async def main():
-    args = set(sys.argv[1:])
-
-    if "--recon" in args:
-        from recon import run_full_recon
-        await run_full_recon()
-
-    elif "--extract" in args:
-        from api_extractor import extract_from_apis
-        from ai_extractor import extract_all_pages
-        await extract_from_apis()
-        await extract_all_pages()
-
+    args = sys.argv[1:]
+    if "--level" in args:
+        idx = args.index("--level")
+        level = args[idx + 1] if idx + 1 < len(args) else "0"
+        if level == "1":
+            from level1_http import run_level1
+            await run_level1()
+        elif level == "2":
+            from level2_scrapling import run_level2
+            await run_level2()
+        elif level == "3":
+            from level3_pydoll import run_level3
+            await run_level3()
+        elif level == "4":
+            from level4_ai import run_level4
+            await run_level4()
     elif "--report" in args:
         from report_generator import generate_report
         generate_report()
-
+    elif "--validate" in args:
+        from validator import validate
+        await validate()
     else:
-        await run_full_pipeline()
+        await run_cascade()
 
 
 if __name__ == "__main__":
@@ -155,10 +198,7 @@ if __name__ == "__main__":
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(
-                OUTPUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}.log",
-                encoding="utf-8",
-            ),
+            logging.FileHandler(OUTPUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}.log"),
         ],
     )
     asyncio.run(main())

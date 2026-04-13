@@ -1,7 +1,11 @@
 """
-AI Extraction via Claude Code CLI.
+Level 4: AI Extraction via Claude Code CLI.
+
 Uses `claude -p` (Pro/Max plan) instead of Anthropic API SDK.
 No API key needed — authenticated via `claude login` OAuth.
+
+Reads HTML from the BEST available level:
+  Priority: level2 (Scrapling) > level3 (Pydoll) > level1 (HTTP)
 """
 import asyncio
 import json
@@ -78,7 +82,7 @@ Page: {page_name}
 HTML content:
 {cleaned}"""
 
-    log.info(f"🤖 Sending {len(cleaned):,} chars to Claude CLI ({page_name})...")
+    log.info(f"  Sending {len(cleaned):,} chars to Claude CLI ({page_name})...")
     start = time.time()
 
     try:
@@ -103,7 +107,7 @@ HTML content:
 
         if process.returncode != 0:
             error_msg = stderr.decode("utf-8", errors="replace").strip()
-            log.error(f"  ❌ Claude CLI error (code {process.returncode}): {error_msg}")
+            log.error(f"  Claude CLI error (code {process.returncode}): {error_msg}")
             return _fallback_regex(html_content)
 
         output = stdout.decode("utf-8", errors="replace").strip()
@@ -115,7 +119,7 @@ HTML content:
             if json_match:
                 response_data = json.loads(json_match.group())
             else:
-                log.error("  ❌ Could not parse Claude CLI output")
+                log.error("  Could not parse Claude CLI output")
                 return _fallback_regex(html_content)
 
         # Claude CLI --output-format json wraps in {result, session_id, ...}
@@ -136,25 +140,25 @@ HTML content:
             result = response_data
 
         n = len(result.get("subscriptions", []))
-        log.info(f"  ✅ Claude CLI: {n} subscriptions in {duration:.1f}s")
+        log.info(f"  Claude CLI: {n} subscriptions in {duration:.1f}s")
         return result
 
     except asyncio.TimeoutError:
-        log.error(f"  ⏰ Claude CLI timeout ({CLAUDE_TIMEOUT}s)")
+        log.error(f"  Claude CLI timeout ({CLAUDE_TIMEOUT}s)")
         return _fallback_regex(html_content)
     except FileNotFoundError:
-        log.error("  ❌ Claude Code CLI not found!")
+        log.error("  Claude Code CLI not found!")
         log.error("     Install: npm install -g @anthropic-ai/claude-code")
         log.error("     Login:   claude login")
         return _fallback_regex(html_content)
     except Exception as e:
-        log.error(f"  ❌ Claude CLI error: {e}")
+        log.error(f"  Claude CLI error: {e}")
         return _fallback_regex(html_content)
 
 
 def _fallback_regex(html: str) -> dict:
     """Regex fallback when Claude CLI unavailable."""
-    log.info("  🔧 Using regex fallback...")
+    log.info("  Using regex fallback...")
     subscriptions = []
     patterns = [
         r'(Liberty\s*Plus?\s*\d+)',
@@ -172,36 +176,73 @@ def _fallback_regex(html: str) -> dict:
                 "price_mdl": float(price_match.group(1)) if price_match else 0.0,
                 "source_method": "regex_fallback",
             })
-    log.info(f"  🔧 Regex found {len(subscriptions)} plans")
+    log.info(f"  Regex found {len(subscriptions)} plans")
     return {"subscriptions": subscriptions, "method": "regex_fallback"}
 
 
-async def extract_all_pages() -> dict:
-    """Process all rendered HTML files from recon phase."""
+async def run_level4() -> dict:
+    """
+    Level 4: AI extraction from the BEST available HTML.
+    Priority: level2 (Scrapling) > level3 (Pydoll) > level1 (HTTP)
+    """
+    html_files = []
+
+    # Priority 1: Scrapling HTML (most reliable, best rendering)
+    html_files.extend(sorted(OUTPUT_DIR.glob("level2_*.html")))
+    # Priority 2: Pydoll HTML
+    html_files.extend(sorted(OUTPUT_DIR.glob("level3_pydoll_*.html")))
+    # Priority 3: Raw HTTP (probably empty but try)
+    html_files.extend(sorted(OUTPUT_DIR.glob("level1_*.html")))
+
+    if not html_files:
+        log.error("No HTML files from previous levels!")
+        return {"level": 4, "subscriptions": [], "error": "no HTML available"}
+
+    # Deduplicate by target name, keep highest priority (first match wins)
+    seen = {}
+    for f in html_files:
+        target = f.stem
+        for prefix in ["level1_", "level2_", "level3_pydoll_"]:
+            target = target.replace(prefix, "")
+        if target not in seen:
+            seen[target] = f
+
+    log.info(f"LEVEL 4: AI Extraction from {len(seen)} pages")
+
     all_subs = []
-    for html_file in sorted(OUTPUT_DIR.glob("recon_*.html")):
-        page_name = html_file.stem.replace("recon_", "")
-        log.info(f"\n📄 Processing: {page_name}")
+    for target_name, html_file in seen.items():
+        source = "scrapling" if "level2" in html_file.name else "pydoll" if "level3" in html_file.name else "http"
+        page_name = f"{target_name} (via {source})"
+
+        log.info(f"\n  Processing: {page_name}")
         html = html_file.read_text(encoding="utf-8")
+
+        if len(html) < 1000:
+            log.info(f"  Skipping — too small ({len(html)} chars)")
+            continue
+
         result = await extract_with_claude_cli(html, page_name)
         for sub in result.get("subscriptions", []):
-            sub["source_page"] = page_name
+            sub["source_page"] = target_name
+            sub["source_level"] = source
             sub["source_method"] = sub.get("source_method", "claude_cli")
             sub["extracted_at"] = datetime.now().isoformat()
             all_subs.append(sub)
 
     output = {
-        "extraction_date": datetime.now().isoformat(),
+        "level": 4,
         "method": "claude_cli",
+        "timestamp": datetime.now().isoformat(),
         "total": len(all_subs),
         "subscriptions": all_subs,
     }
-    output_path = OUTPUT_DIR / "ai_extraction.json"
+
+    output_path = OUTPUT_DIR / "level4_ai_extraction.json"
     output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
-    log.info(f"\n✅ AI extraction: {len(all_subs)} subscriptions → {output_path}")
+    log.info(f"\n  Level 4: {len(all_subs)} subscriptions -> {output_path}")
     return output
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    asyncio.run(extract_all_pages())
+    asyncio.run(run_level4())

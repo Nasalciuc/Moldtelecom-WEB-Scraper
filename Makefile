@@ -1,34 +1,39 @@
-.PHONY: build run recon extract report login shell clean
+.PHONY: build run level1 level2 level3 validate report login shell clean
 
-# Собрать контейнер
+# Build container
 build:
 	docker compose build
 
-# Полный pipeline
+# Full 4-level cascade
 run:
 	docker compose run --rm agent
 
-# Только разведка
-recon:
-	docker compose run --rm agent --recon
+# Run specific levels
+level1:
+	docker compose run --rm agent --level 1
 
-# Только extraction
-extract:
-	docker compose run --rm agent --extract
+level2:
+	docker compose run --rm agent --level 2
 
-# Только отчёт
+level3:
+	docker compose run --rm agent --level 3
+
+# Only validation
+validate:
+	docker compose run --rm agent --validate
+
+# Only report
 report:
 	docker compose run --rm agent --report
 
-# Авторизация Claude CLI внутри контейнера
-# ВАЖНО: запустить один раз перед первым использованием
+# Claude CLI login (one-time)
 login:
 	docker compose run --rm agent bash -c "claude login"
 
-# Shell для дебага
+# Debug shell
 shell:
 	docker compose run --rm --entrypoint bash agent
 
-# Очистить output
+# Clean output
 clean:
 	rm -f output/*.json output/*.html output/*.log output/*.md

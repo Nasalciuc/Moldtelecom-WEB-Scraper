@@ -1,11 +1,13 @@
 """
-Reconnaissance module — stealth browser + network interception.
+Level 3: Pydoll CDP — Network interception & API discovery (OPTIONAL).
 
 Uses Pydoll (CDP-based, no webdriver flag) to:
 1. Open Moldtelecom pages like a real browser
 2. Intercept ALL network requests/responses
 3. Discover API endpoints that the SPA calls
 4. Save fully rendered HTML (after JS execution)
+
+This level is OPTIONAL — cascade works without it if pydoll is not installed.
 """
 import asyncio
 import json
@@ -17,11 +19,21 @@ from datetime import datetime
 from config import (
     TARGETS, OUTPUT_DIR, SUBSCRIPTION_KEYWORDS,
     PAGE_LOAD_WAIT, SCROLL_STEPS, SCROLL_DELAY,
-    REQUEST_DELAY_MIN, REQUEST_DELAY_MAX,
+    REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, IN_DOCKER,
+    WARMUP_URL,
 )
 from models import ReconResult, DiscoveredEndpoint
+from stealth import human_delay, page_delay
 
 log = logging.getLogger(__name__)
+
+
+def _pydoll_available() -> bool:
+    try:
+        from pydoll.browser.chromium import Chrome
+        return True
+    except ImportError:
+        return False
 
 
 class NetworkCapture:
@@ -90,9 +102,9 @@ class NetworkCapture:
         self.discovered_apis.append(endpoint)
 
         if has_sub_data:
-            log.info(f"💰 SUBSCRIPTION DATA endpoint: {url[:100]}")
+            log.info(f"  SUBSCRIPTION DATA endpoint found: {url[:100]}")
         else:
-            log.info(f"🔗 API endpoint: {url[:100]}")
+            log.info(f"  API endpoint: {url[:100]}")
 
 
 async def run_recon(target_name: str, target_url: str) -> ReconResult:
@@ -100,7 +112,6 @@ async def run_recon(target_name: str, target_url: str) -> ReconResult:
     Run reconnaissance on a single page.
     Opens with Pydoll, intercepts network, captures rendered HTML.
     """
-    # Pydoll v2 API: Chrome class, ChromiumOptions, enable_network_events(), NetworkEvent enum
     from pydoll.browser.chromium import Chrome
     from pydoll.browser.options import ChromiumOptions
     from pydoll.protocol.network.events import NetworkEvent
@@ -119,11 +130,10 @@ async def run_recon(target_name: str, target_url: str) -> ReconResult:
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
 
-    from config import IN_DOCKER
     if IN_DOCKER:
         options.add_argument("--disable-gpu")
 
-    log.info(f"🌐 RECON: {target_name} → {target_url}")
+    log.info(f"  RECON: {target_name}")
 
     try:
         async with Chrome(options=options) as browser:
@@ -132,19 +142,24 @@ async def run_recon(target_name: str, target_url: str) -> ReconResult:
             # Enable network monitoring via CDP
             await tab.enable_network_events()
 
-            # Attach event listeners for network capture (sync callbacks are fine)
+            # Attach event listeners for network capture
             await tab.on(NetworkEvent.REQUEST_WILL_BE_SENT, capture.handle_request)
             await tab.on(NetworkEvent.RESPONSE_RECEIVED, capture.handle_response)
 
+            # Warmup: visit homepage first (look like real user)
+            log.info("  Warming up on homepage...")
+            await tab.go_to(WARMUP_URL)
+            await asyncio.sleep(random.uniform(3.0, 6.0))
+
             # Navigate to target and wait for page load
-            log.info("  ⏳ Navigating...")
+            log.info("  Navigating to target...")
             await tab.go_to(target_url)
 
             # Extra wait for SPA dynamic content
             await asyncio.sleep(PAGE_LOAD_WAIT)
 
             # Scroll through entire page to trigger lazy loading
-            log.info("  📜 Scrolling to trigger lazy content...")
+            log.info("  Scrolling to trigger lazy content...")
             for i in range(SCROLL_STEPS):
                 scroll_pct = (i + 1) / SCROLL_STEPS
                 await tab.execute_script(
@@ -156,14 +171,14 @@ async def run_recon(target_name: str, target_url: str) -> ReconResult:
             await tab.execute_script("window.scrollTo(0, 0)")
             await asyncio.sleep(1)
 
-            # Capture fully rendered HTML and page title via built-in async properties
+            # Capture fully rendered HTML and page title
             rendered_html = await tab.page_source
             page_title = await tab.title
 
             result.rendered_html = rendered_html or ""
             result.page_title = page_title or ""
 
-            # Try to fetch response bodies from discovered API endpoints using browser context
+            # Try to fetch response bodies from discovered API endpoints
             for endpoint in capture.discovered_apis:
                 try:
                     raw = await tab.execute_script(
@@ -184,7 +199,7 @@ async def run_recon(target_name: str, target_url: str) -> ReconResult:
                     endpoint.sample_response_preview = str(body) if body else ""
                     endpoint.response_size_bytes = len(str(body)) if body else 0
                 except Exception as e:
-                    log.warning(f"  ⚠️ Could not fetch body for {endpoint.url[:60]}: {e}")
+                    log.warning(f"  Could not fetch body for {endpoint.url[:60]}: {e}")
 
             result.discovered_endpoints = [ep.to_dict() for ep in capture.discovered_apis]
             result.all_network_requests = capture.requests
@@ -198,21 +213,21 @@ async def run_recon(target_name: str, target_url: str) -> ReconResult:
         result.error = (
             "pydoll-python not installed. Run: pip install pydoll-python"
         )
-        log.error(f"  ❌ {result.error}")
+        log.error(f"  {result.error}")
     except Exception as e:
         result.error = str(e)
-        log.error(f"  ❌ Recon failed: {e}")
+        log.error(f"  Recon failed: {e}")
 
     result.duration_seconds = time.time() - start_time
 
     # Save rendered HTML to file
     if result.rendered_html:
-        html_path = OUTPUT_DIR / f"recon_{target_name}.html"
+        html_path = OUTPUT_DIR / f"level3_pydoll_{target_name}.html"
         html_path.write_text(result.rendered_html, encoding="utf-8")
-        log.info(f"  💾 HTML saved: {html_path} ({len(result.rendered_html):,} chars)")
+        log.info(f"  HTML saved: {html_path} ({len(result.rendered_html):,} chars)")
 
     log.info(
-        f"  📊 Requests: {len(capture.requests)} | "
+        f"  Requests: {len(capture.requests)} | "
         f"APIs: {len(capture.discovered_apis)} | "
         f"Duration: {result.duration_seconds:.1f}s"
     )
@@ -255,18 +270,24 @@ async def _detect_anti_scraping(tab) -> list[str]:
             detected = _js_value(raw)
             if detected:
                 signals.append(name)
-                log.warning(f"  🛡️ Anti-scraping detected: {name}")
+                log.warning(f"  Anti-scraping detected: {name}")
         except Exception:
             pass
 
     if not signals:
-        log.info("  ✅ No anti-scraping measures detected")
+        log.info("  No anti-scraping measures detected")
 
     return signals
 
 
-async def run_full_recon() -> dict[str, ReconResult]:
-    """Run recon on all target pages."""
+async def run_level3() -> dict:
+    """Run Level 3: Pydoll network interception on all target pages."""
+    if not _pydoll_available():
+        log.warning("Pydoll not installed — skipping Level 3 (network interception disabled)")
+        return {"level": 3, "available": False, "error": "pydoll not installed"}
+
+    log.info("LEVEL 3: Pydoll CDP Network Interception")
+
     results: dict[str, ReconResult] = {}
 
     for name, url in TARGETS.items():
@@ -275,16 +296,18 @@ async def run_full_recon() -> dict[str, ReconResult]:
         results[name] = result
 
         # Polite delay between pages
-        delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
-        log.info(f"  ⏱️ Waiting {delay:.1f}s before next page...")
-        await asyncio.sleep(delay)
+        await page_delay(f"after {name}")
 
     # Save consolidated recon report
     report: dict = {
+        "level": 3,
+        "method": "pydoll_cdp",
+        "available": True,
         "recon_date": datetime.now().isoformat(),
         "targets_scanned": len(results),
         "results": {},
     }
+    all_endpoints = []
     for name, res in results.items():
         report["results"][name] = {
             "url": res.target_url,
@@ -298,14 +321,20 @@ async def run_full_recon() -> dict[str, ReconResult]:
             "duration_s": res.duration_seconds,
             "endpoints": res.discovered_endpoints,
         }
+        all_endpoints.extend(res.discovered_endpoints)
 
-    report_path = OUTPUT_DIR / "recon_report.json"
+    report_path = OUTPUT_DIR / "level3_pydoll_report.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    log.info(f"\n📊 Recon report saved: {report_path}")
+    log.info(f"\n  Level 3 report saved: {report_path}")
 
-    return results
+    # Save discovered API endpoints separately for api_replay
+    endpoints_path = OUTPUT_DIR / "level3_api_endpoints.json"
+    endpoints_path.write_text(json.dumps(all_endpoints, ensure_ascii=False, indent=2))
+    log.info(f"  API endpoints saved: {endpoints_path} ({len(all_endpoints)} endpoints)")
+
+    return report
 
 
 if __name__ == "__main__":
@@ -313,4 +342,4 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
-    asyncio.run(run_full_recon())
+    asyncio.run(run_level3())
